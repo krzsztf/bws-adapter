@@ -16,8 +16,6 @@ RUN go vet -v
 
 RUN go build --ldflags '-extldflags "-lm"'
 
-FROM gcr.io/distroless/static-debian12
+RUN mv /build/bws-adapter /usr/bin/
 
-COPY --from=builder /build/bws-adapter /
-
-CMD ["/bws-adapter"]
+CMD ["/usr/bin/bws-adapter"]

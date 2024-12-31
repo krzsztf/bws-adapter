@@ -1,0 +1,25 @@
+policy_module(bws_adapter, 1.0.0)
+
+########################################
+#
+# Declarations
+#
+
+type bws_adapter_t;
+type bws_adapter_exec_t;
+init_daemon_domain(bws_adapter_t, bws_adapter_exec_t)
+
+permissive bws_adapter_t;
+
+########################################
+#
+# bws_adapter local policy
+#
+allow bws_adapter_t self:fifo_file rw_fifo_file_perms;
+allow bws_adapter_t self:unix_stream_socket create_stream_socket_perms;
+
+domain_use_interactive_fds(bws_adapter_t)
+
+files_read_etc_files(bws_adapter_t)
+
+miscfiles_read_localization(bws_adapter_t)

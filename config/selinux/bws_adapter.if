@@ -1,0 +1,40 @@
+
+## <summary>policy for bws_adapter</summary>
+
+########################################
+## <summary>
+##	Execute bws_adapter_exec_t in the bws_adapter domain.
+## </summary>
+## <param name="domain">
+## <summary>
+##	Domain allowed to transition.
+## </summary>
+## </param>
+#
+interface(`bws_adapter_domtrans',`
+	gen_require(`
+		type bws_adapter_t, bws_adapter_exec_t;
+	')
+
+	corecmd_search_bin($1)
+	domtrans_pattern($1, bws_adapter_exec_t, bws_adapter_t)
+')
+
+######################################
+## <summary>
+##	Execute bws_adapter in the caller domain.
+## </summary>
+## <param name="domain">
+##	<summary>
+##	Domain allowed access.
+##	</summary>
+## </param>
+#
+interface(`bws_adapter_exec',`
+	gen_require(`
+		type bws_adapter_exec_t;
+	')
+
+	corecmd_search_bin($1)
+	can_exec($1, bws_adapter_exec_t)
+')

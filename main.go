@@ -23,13 +23,13 @@ var httpClient = &http.Client{
 }
 
 func GetRuntimeDirectory() string {
+	baseDir := "/run/bws"
 	if systemdRunDir, ok := os.LookupEnv("RUNTIME_DIRECTORY"); ok {
-		return systemdRunDir
+		baseDir = systemdRunDir
+	} else if xdgRunDir, ok := os.LookupEnv("XDG_RUNTIME_DIR"); ok {
+		baseDir = xdgRunDir + "/bws"
 	}
-	if xdgRunDir, ok := os.LookupEnv("XDG_RUNTIME_DIR"); ok {
-		return xdgRunDir
-	}
-	return "/run"
+	return baseDir
 }
 
 const bitwardenIdpUrl = "https://identity.bitwarden.com"
@@ -44,16 +44,33 @@ type TokenResponse struct {
 	Scope       string `json:"scope"`
 }
 
-func GetSecretManagerToken() (TokenResponse, error) {
-	var bwsAccessToken, ok = os.LookupEnv("BWS_ACCESS_TOKEN")
+func GetBwsAccessToken() (string, error) {
+	bwsAccessToken, ok := os.LookupEnv("BWS_ACCESS_TOKEN")
+
 	if !ok {
-		return TokenResponse{}, errors.New("BWS access token not provided")
+		bwsAccessTokenFile, ok := os.LookupEnv("BWS_ACCESS_TOKEN_FILE")
+		if !ok {
+			return "", errors.New("BWS access token or token file not provided")
+		}
+
+		log.Printf("Reading token from %s", bwsAccessTokenFile)
+		bwsAccessTokenData, err := os.ReadFile(bwsAccessTokenFile)
+		if err != nil {
+			return "", errors.New(fmt.Sprintf("Failed to read access token file: %s", err))
+		}
+
+		bwsAccessToken = string(bwsAccessTokenData)
 	}
 
-	var sep = regexp.MustCompile("[.:]")
-	var parts = sep.Split(bwsAccessToken, -1)
+	return bwsAccessToken, nil
+}
+
+var tokenSeparator = regexp.MustCompile("[.:]")
+
+func GetSecretManagerToken(bwsAccessToken string) (TokenResponse, error) {
+	parts := tokenSeparator.Split(bwsAccessToken, -1)
 	if len(parts) != 4 {
-		return TokenResponse{}, errors.New("Unexpected BWS access token format")
+		return TokenResponse{}, errors.New(fmt.Sprintf("Unexpected BWS access token format: '%s'", bwsAccessToken))
 	}
 	if parts[0] != "0" {
 		return TokenResponse{}, errors.New("Unexpected BWS access token version")
@@ -61,8 +78,6 @@ func GetSecretManagerToken() (TokenResponse, error) {
 
 	log.Printf("Fetching BWS token for client_id=%s", parts[1])
 
-	// TODO client_seccret in body/headers?
-	// PostForms vs BasicAuth
 	var params = url.Values{}
 	params.Set("scope", "api.secrets")
 	params.Set("client_id", parts[1])
@@ -73,17 +88,20 @@ func GetSecretManagerToken() (TokenResponse, error) {
 	if err != nil {
 		return TokenResponse{}, errors.New(fmt.Sprintf("Failed to build request: %s", err))
 	}
-	//req.SetBasicAuth(parts[1], parts[2])
 	req.Header.Add("Accept", "application/json")
 	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return TokenResponse{}, errors.New(fmt.Sprintf("Request failed: %s", err))
 	}
-	// check status
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return TokenResponse{}, errors.New(fmt.Sprintf("Failed reading response: %s", err))
+	}
+
+	if resp.StatusCode != 200 {
+		return TokenResponse{}, errors.New(fmt.Sprintf("Failed to obtain token: status=%d error=%s", resp.StatusCode, body))
 	}
 
 	var data TokenResponse
@@ -94,20 +112,20 @@ func GetSecretManagerToken() (TokenResponse, error) {
 	return data, nil
 }
 
-func GetSecretManagerOrgId() (string, error) {
-	accessToken, err := GetSecretManagerToken()
+func GetSecretManagerOrgId(bwsAccessToken string) (string, error) {
+	accessToken, err := GetSecretManagerToken(bwsAccessToken)
 	if err != nil {
 		return "", err
 	}
 	parsed, err := jws.ParseString(accessToken.AccessToken)
 	if err != nil {
-		return "", err
+		return "", errors.New(fmt.Sprintf("Failed to parse access token: %s, '%s'", err, accessToken.AccessToken))
 	}
 
 	var payload map[string]interface{}
 	err = json.Unmarshal(parsed.Payload(), &payload)
 	if err != nil {
-		return "", nil
+		return "", err
 	}
 
 	orgId, ok := payload["organization"].(string)
@@ -119,12 +137,7 @@ func GetSecretManagerOrgId() (string, error) {
 	return orgId, nil
 }
 
-func CreateBitwardenClient() (sdk.BitwardenClientInterface, error) {
-	var bwsAccessToken, ok = os.LookupEnv("BWS_ACCESS_TOKEN")
-	if !ok {
-		return nil, errors.New("BWS access token not provided")
-	}
-
+func CreateBitwardenClient(bwsAccessToken string) (sdk.BitwardenClientInterface, error) {
 	bitwardenClient, err := sdk.NewBitwardenClient(nil, nil)
 	if err == nil {
 		err = bitwardenClient.AccessTokenLogin(bwsAccessToken, nil)
@@ -150,8 +163,18 @@ func FetchSecret(secretsClient sdk.SecretsInterface, orgId string, secretKey str
 }
 
 func main() {
-	var address = fmt.Sprintf("%s/bws.socket", GetRuntimeDirectory())
-	log.Printf("Listenting to %s", address)
+	runtimeDir := GetRuntimeDirectory()
+	if err := os.MkdirAll(runtimeDir, 0755); err != nil {
+		log.Fatalf("Failed to create runtime directory: %v", err)
+	}
+
+	var address = fmt.Sprintf("%s/bws.sock", runtimeDir)
+	log.Printf("Listening to %s", address)
+
+	// Remove existing socket file if it exists
+	if err := os.Remove(address); err != nil && !os.IsNotExist(err) {
+		log.Printf("Warning: could not remove existing socket file: %v", err)
+	}
 
 	socket, err := net.Listen("unix", address)
 	if err != nil {
@@ -159,11 +182,16 @@ func main() {
 	}
 	defer socket.Close()
 
-	orgId, err := GetSecretManagerOrgId()
+	bwsAccessToken, err := GetBwsAccessToken()
 	if err != nil {
 		log.Fatal(err)
 	}
-	client, err := CreateBitwardenClient()
+
+	orgId, err := GetSecretManagerOrgId(bwsAccessToken)
+	if err != nil {
+		log.Fatal(err)
+	}
+	client, err := CreateBitwardenClient(bwsAccessToken)
 	if err != nil {
 		log.Fatal(err)
 	}

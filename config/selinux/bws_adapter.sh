@@ -43,10 +43,4 @@ make -f /usr/share/selinux/devel/Makefile bws_adapter.pp || exit
 /usr/sbin/semodule -i bws_adapter.pp
 
 # Generate a man page of the installed module
-sepolicy manpage -p . -d bws_adapter_t
-# Fixing the file context on /var/usrlocal/bin/bws-adapter
-/sbin/restorecon -F -R -v /var/usrlocal/bin/bws-adapter
-# Generate a rpm package for the newly generated policy
-
-pwd=$(pwd)
-rpmbuild --define "_sourcedir ${pwd}" --define "_specdir ${pwd}" --define "_builddir ${pwd}" --define "_srcrpmdir ${pwd}" --define "_rpmdir ${pwd}" --define "_buildrootdir ${pwd}/.build"  -ba bws_adapter_selinux.spec
+sepolicy manpage -p . -d container_bws_adapter_t

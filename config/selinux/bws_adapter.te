@@ -5,21 +5,31 @@ policy_module(bws_adapter, 1.0.0)
 # Declarations
 #
 
-type bws_adapter_t;
-type bws_adapter_exec_t;
-init_daemon_domain(bws_adapter_t, bws_adapter_exec_t)
+require {
+    type container_file_t;
+    type init_t;
+    type init_var_run_t;
+    type var_run_t;
+};
 
-permissive bws_adapter_t;
+container_domain_template(container_bws_adapter, container)
+
+###
+#
+# container_bws_adapter local policy
+#
+
+# Reading BWS access token from /run/credentials/bws-adapter.service
+allow container_bws_adapter_t init_var_run_t:file read_file_perms;
+
+# Listen to /run/bws/bws.sock
+manage_sock_files_pattern(container_bws_adapter_t, var_run_t, var_run_t);
+
+# Access Bitwarden API calls
+corenet_tcp_connect_http_port(container_bws_adapter_t)
 
 ########################################
 #
-# bws_adapter local policy
+# Allow systemd to connect to BWS adapter socket
 #
-allow bws_adapter_t self:fifo_file rw_fifo_file_perms;
-allow bws_adapter_t self:unix_stream_socket create_stream_socket_perms;
-
-domain_use_interactive_fds(bws_adapter_t)
-
-files_read_etc_files(bws_adapter_t)
-
-miscfiles_read_localization(bws_adapter_t)
+allow init_t container_bws_adapter_t:unix_stream_socket connectto;
